@@ -1,4 +1,9 @@
 ### Python template
+
+# specific training files
+data.tsv
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
