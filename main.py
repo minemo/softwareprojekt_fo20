@@ -81,11 +81,13 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-def yield_tokens(data_iter, tokenizer, do_filtering=False):
+def yield_tokens(data_iter, tokenizer, do_filtering=False, only_hashtags=False):
     for text in data_iter['c_text']:
         if do_filtering:
             text = ' '.join(re.sub("([^0-9A-Za-z \t])|(\w+:\/\/\S+)", " ", text).split())
             text = re.sub(r'http\S+', ' ', text)
+        if only_hashtags:
+            text = ' '.join(re.findall(r"#(\w+)", text))
         yield tokenizer.tokenize(text)
 
 
@@ -116,19 +118,16 @@ def main():
     # print some info about the dataset
     # printDSInfo(ds.dataset)
 
+    # TODO Implement own tokenizer
     tokenizer = nltk.tokenize.TreebankWordTokenizer()
     # tokenize the first entry of the dataset
-    vocab = build_vocab_from_iterator(yield_tokens(ds.dataset, tokenizer, True), specials=["<unk>"])
+    vocab = build_vocab_from_iterator(yield_tokens(ds.dataset, tokenizer, False, True), specials=["<unk>"])
     vocab.set_default_index(vocab["<unk>"])
 
-    # create a dataloader
-    dataloader = DataLoader(ds, batch_size=32, shuffle=False)
+    print(vocab.get_itos())
+    print(len(vocab.get_itos()))
 
-    # create a model
-    model = TweetTransformer(ntoken=len(vocab), d_model=512, nhead=8, d_hid=2048, nlayers=6, dropout=0.2).to(DEVICE)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+    # create a dataloader
 
 
 if __name__ == '__main__':
