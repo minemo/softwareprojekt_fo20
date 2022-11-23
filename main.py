@@ -3,9 +3,18 @@ import numpy as np
 import torch
 import nltk
 import demoji
+import emoji
+import os
+
+from sklearn.cluster import AgglomerativeClustering
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn import metrics
+import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
-from torch.utils.data import DataLoader
-from model import TwitterHatespeechModel
+from model import InductiveClusterer
+
+
+# from model import TwitterHatespeechModel
 
 
 def load_tsv(path: str):
@@ -65,6 +74,45 @@ class TweetTokenizer:
         return output
 
 
+def count_mentions(text: str):
+    """Count the number of mentions in a tweet"""
+    return text.count("@")
+
+
+def count_hashtags(text: str):
+    """Count the number of hashtags in a tweet"""
+    return text.count("#")
+
+
+def get_emoji_meaning(text: str):
+    # categorize emojis
+    # 0: positive
+    # 1: negative
+    # 2: neutral
+    # 3: female
+    # 4: male
+
+    emojs = list(demoji.findall(text))
+    out = 2.0
+    if emojs:
+        vals = []
+        for e in emojs:
+            if '❤' or '‍🤝' in e:
+                vals.append(0.0)
+            elif '‍♂' in e:
+                vals.append(4.0)
+            elif '‍♀' in e:
+                vals.append(3.0)
+            elif '😂' in e:
+                vals.append(2.0)
+            elif '😭' in e:
+                vals.append(1.0)
+            else:
+                vals.append(2.0)
+        out = sum(vals) / len(vals)
+    return out
+
+
 class TwitterDataset(Dataset):
     """Dataset of tweets and corresponding hate-speech rating, toxicity and target label"""
 
@@ -88,14 +136,12 @@ class TwitterDataset(Dataset):
             add_special_tokens=True,
             max_len=self.max_len,
             padding='max_length',
-            return_attention_mask=True,
             return_tensors='pt',
         )
 
         return {
             'text': text,
             'input_ids': encoding['input_ids'].flatten(),
-            'attention_mask': encoding['attention_mask'].flatten(),
             'rating': torch.tensor(rating, dtype=torch.long),
             'target': torch.tensor(["person", "group", "public", ""].index(target), dtype=torch.long)
         }
@@ -109,11 +155,11 @@ def cross_validation_split(dataframe: pd.DataFrame, n_splits=5):
     for i in range(n_splits):
         test = folds[i]
         train = pd.concat(folds[:i] + folds[i + 1:])
-        splits.append((train, test))
+        splits.append((train, test, i))
     return splits
 
 
-def main(debug=False):
+def main(debug=False, use_k_fold=True):
     """Main function"""
 
     if debug:
@@ -130,24 +176,95 @@ def main(debug=False):
         print(df.head())
         print(df.describe())
         print(df.info())
-        print('-' * 80)
 
-    # create a Dataloader with k-fold cross validation
-    splits = cross_validation_split(df, 5)
+    best = [AgglomerativeClustering(), RandomForestClassifier(n_jobs=-1)]
 
-    for i, (train, test) in enumerate(splits):
-        train_dataset = TwitterDataset(train, TweetTokenizer(), 50)
-        test_dataset = TwitterDataset(test, TweetTokenizer(), 50)
-        train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-        test_dataloader = DataLoader(test_dataset, batch_size=32, shuffle=True)
-        if debug:
-            print(f"Fold {i + 1}")
-            print(f"Train dataset: {len(train_dataset)}")
-            print(f"Test dataset: {len(test_dataset)}")
-            print(f"Train dataloader: {len(train_dataloader)}")
-            print(f"Test dataloader: {len(test_dataloader)}")
+    if use_k_fold:
+        splits = cross_validation_split(df, n_splits=5)
+
+        for train, test, i in splits:
             print('-' * 80)
+            print(f'Split: {i}')
+            print('Training...')
+            X = np.array(
+                [[count_mentions(text), get_emoji_meaning(text), count_hashtags(text)] for text in train['c_text']])
+            Y = np.array(train['hatespeech'])
+            clf = best[0]
+            clf.fit(X, Y)
+            train_score = clf.score(X, Y)
+            print(f'Accuracy: {train_score}')
+
+            # test with the test set
+            print('Testing...')
+            X = np.array(
+                [[count_mentions(text), get_emoji_meaning(text), count_hashtags(text)] for text in test['c_text']])
+            Y = np.array(test['hatespeech'])
+            test_score = clf.score(X, Y)
+            print(f'Accuracy: {test_score}')
+
+            if test_score > best[1]:
+                best[1] = test_score
+
+        # print some example classifications
+        if debug:
+            print('-' * 80)
+            clf = best[0]
+            print('Example classifications')
+            for text in df['c_text'].sample(10):
+                print(
+                    f'Tweet with {count_mentions(text)} mentions and {count_hashtags(text)} hashtags and emojis:{get_emoji_meaning(text)} should be {clf.predict([[count_mentions(text), get_emoji_meaning(text), count_hashtags(text)]])[0]}')
+                print(f'Actual hate-speech rating: {df[df["c_text"] == text]["hatespeech"].values[0]}')
+
+            dat = df.sample(1)
+            X = np.array(
+                [[count_mentions(text), get_emoji_meaning(text), count_hashtags(text)] for text in dat['c_text']])
+            Y = np.array(dat['hatespeech'])
+            metrics.ConfusionMatrixDisplay.from_estimator(clf, X, Y).plot()
+            plt.show()
+    else:
+        train = df.sample(frac=0.8)
+        test = df.drop(train.index)
+        print('-' * 80)
+        print('Training...')
+        X = np.array(
+            [[get_emoji_meaning(text), count_mentions(text)] for text in train['c_text']])
+        Y = np.array(train['hatespeech'])
+        cluster = best[0]
+        cluster.fit(X, Y)
+        clf = best[1]
+        best.append(InductiveClusterer(cluster, clf))
+        indl = best[2].fit(X, Y)
+        # score is distance of prediction to actual value
+        train_score = sum([abs(indl.predict(X)[i] - Y[i]) for i in range(len(Y))]) / len(Y)
+        print(f'Accuracy: {train_score}')
+
+        # test with the test set
+        print('Testing...')
+        X = np.array([[get_emoji_meaning(text), count_mentions(text)] for text in test['c_text']])
+        Y = np.array(test['hatespeech'])
+        test_score = sum([abs(indl.predict(X)[i] - Y[i]) for i in range(len(Y))]) / len(Y)
+        print(f'Accuracy: {test_score}')
+
+        # print some example classifications
+        if debug:
+            print('-' * 80)
+            cluster = best[0]
+            clf = best[1]
+            indl = best[2].fit(X)
+            print('Example classifications')
+            for text in df['c_text'].sample(10):
+                print(
+                    f'Tweet with {count_mentions(text)} mentions and {count_hashtags(text)} hashtags and emojis:{get_emoji_meaning(text)} should be {indl.predict([[get_emoji_meaning(text), count_mentions(text)]])[0]}')
+                print(f'Actual hate-speech rating: {df[df["c_text"] == text]["hatespeech"].values[0]}')
+
+            dat = df.sample(300)
+            X = np.array([[get_emoji_meaning(text), count_mentions(text)] for text in dat['c_text']])
+            Y = np.array(dat['hatespeech'])
+            metrics.ConfusionMatrixDisplay.from_estimator(clf, X, Y).plot()
+            metrics.RocCurveDisplay.from_estimator(clf, X, Y).plot()
+            metrics.PrecisionRecallDisplay.from_estimator(clf, X, Y).plot()
+            plt.show()
 
 
 if __name__ == '__main__':
-    main(True)
+    main(True, False)
