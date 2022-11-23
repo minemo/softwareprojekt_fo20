@@ -31,7 +31,8 @@ class TweetTokenizer:
         self.vocab.sort()
         self.vocab = ["[PAD]", "[UNK]", "[CLS]", "[SEP]"] + self.vocab
 
-    def get_Link_info(self, text: str):
+
+    def get_link_info(self, text: str):
         """Get the information about the contents of a link in a tweet"""
         # TODO: Implement this function
         raise NotImplementedError
@@ -39,7 +40,7 @@ class TweetTokenizer:
     def encode(self, text: str, max_len=50):
         """Encode a tweet into a list of tokens"""
         text = demoji.replace_with_desc(text, sep=" ")
-        tokens = self.tokenizer.tokenize(text)
+        tokens = self.tokenizer.tokenize(text.lower())
         tokens = tokens[:max_len]
         return tokens
 
@@ -136,16 +137,17 @@ def main(debug=False):
     splits = cross_validation_split(df, 5)
 
     for i, (train, test) in enumerate(splits):
-        train_dataset = TwitterDataset(train, TweetTokenizer(), 50)
-        test_dataset = TwitterDataset(test, TweetTokenizer(), 50)
-        train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-        test_dataloader = DataLoader(test_dataset, batch_size=32, shuffle=True)
+        train_dataset = TwitterDataset(train, TweetTokenizer(), 280)
+        test_dataset = TwitterDataset(test, TweetTokenizer(), 280)
+        train_dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
+        test_dataloader = DataLoader(test_dataset, batch_size=2, shuffle=True)
         if debug:
             print(f"Fold {i + 1}")
             print(f"Train dataset: {len(train_dataset)}")
             print(f"Test dataset: {len(test_dataset)}")
             print(f"Train dataloader: {len(train_dataloader)}")
             print(f"Test dataloader: {len(test_dataloader)}")
+            print(f"{train_dataset.tokenizer.vocab}")
             print('-' * 80)
 
 
