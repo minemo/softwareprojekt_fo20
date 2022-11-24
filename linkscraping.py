@@ -1,8 +1,13 @@
 import snscrape.modules.twitter as sntwitter
 import requests
+import nltk
+from bs4 import BeautifulSoup
+from urllib.request import urlopen
 
 def get_important_words(content: str):
-    raise NotImplementedError
+    html = urlopen(content).read()
+    soup = BeautifulSoup(html, 'html.parser')
+    print(soup.text)
 
 
 def get_image_content(link: str):
