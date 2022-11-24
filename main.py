@@ -219,7 +219,6 @@ def main(debug=False, use_k_fold=True):
 
             # print some example classifications
             if debug:
-                print('-' * 80)
                 cluster = best[0]
                 clf = best[1]
                 indl = best[2].fit(X)
@@ -230,6 +229,8 @@ def main(debug=False, use_k_fold=True):
                                         df[df["c_text"] == text]["hatespeech"].values[0]])
 
                 print(f'Got {sum([1 for i in predictions if i[0] == i[1]])} correct out of {len(predictions)} total')
+            print('-' * 80)
+
     else:
         train = df.sample(frac=0.8)
         test = df.drop(train.index)
