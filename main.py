@@ -1,3 +1,5 @@
+import pickle
+
 import pandas as pd
 import numpy as np
 import torch
@@ -178,49 +180,56 @@ def main(debug=False, use_k_fold=True):
         print(df.info())
 
     best = [AgglomerativeClustering(), RandomForestClassifier(n_jobs=-1)]
+    if os.path.exists("model.pkl"):
+        print("Found model.pkl, loading it...")
+        with open("model.pkl", "rb") as f:
+            best = pickle.load(f)
+        print(f'Loaded Model is: {best}')
+        print(f'Number of clusters: {best[0].n_clusters_}')
+        print(f'Current loss is: {best[2].best_score_}')
+    else:
+        print("No existing model, training from scratch...")
 
     if use_k_fold:
         splits = cross_validation_split(df, n_splits=5)
 
+        print('-' * 80)
+        print('Training...')
         for train, test, i in splits:
-            print('-' * 80)
-            print(f'Split: {i}')
-            print('Training...')
+            print(f'Fold {i + 1}')
             X = np.array(
-                [[count_mentions(text), get_emoji_meaning(text), count_hashtags(text)] for text in train['c_text']])
+                [[get_emoji_meaning(text), count_mentions(text)] for text in train['c_text']])
             Y = np.array(train['hatespeech'])
-            clf = best[0]
-            clf.fit(X, Y)
-            train_score = clf.score(X, Y)
+            cluster = best[0]
+            cluster.fit(X, Y)
+            clf = best[1]
+            if len(best) < 3:
+                best.append(InductiveClusterer(cluster, clf))
+            indl = best[2].fit(X, Y)
+            # score is distance of prediction to actual value
+            train_score = indl.score(X, Y)
             print(f'Accuracy: {train_score}')
 
             # test with the test set
             print('Testing...')
-            X = np.array(
-                [[count_mentions(text), get_emoji_meaning(text), count_hashtags(text)] for text in test['c_text']])
+            X = np.array([[get_emoji_meaning(text), count_mentions(text)] for text in test['c_text']])
             Y = np.array(test['hatespeech'])
-            test_score = clf.score(X, Y)
+            test_score = indl.score(X, Y)
             print(f'Accuracy: {test_score}')
 
-            if test_score > best[1]:
-                best[1] = test_score
+            # print some example classifications
+            if debug:
+                print('-' * 80)
+                cluster = best[0]
+                clf = best[1]
+                indl = best[2].fit(X)
+                print('Example classifications')
+                predictions = []
+                for text in df['c_text'].sample(100):
+                    predictions.append([indl.predict([[get_emoji_meaning(text), count_mentions(text)]])[0],
+                                        df[df["c_text"] == text]["hatespeech"].values[0]])
 
-        # print some example classifications
-        if debug:
-            print('-' * 80)
-            clf = best[0]
-            print('Example classifications')
-            for text in df['c_text'].sample(10):
-                print(
-                    f'Tweet with {count_mentions(text)} mentions and {count_hashtags(text)} hashtags and emojis:{get_emoji_meaning(text)} should be {clf.predict([[count_mentions(text), get_emoji_meaning(text), count_hashtags(text)]])[0]}')
-                print(f'Actual hate-speech rating: {df[df["c_text"] == text]["hatespeech"].values[0]}')
-
-            dat = df.sample(1)
-            X = np.array(
-                [[count_mentions(text), get_emoji_meaning(text), count_hashtags(text)] for text in dat['c_text']])
-            Y = np.array(dat['hatespeech'])
-            metrics.ConfusionMatrixDisplay.from_estimator(clf, X, Y).plot()
-            plt.show()
+                print(f'Got {sum([1 for i in predictions if i[0] == i[1]])} correct out of {len(predictions)} total')
     else:
         train = df.sample(frac=0.8)
         test = df.drop(train.index)
@@ -232,17 +241,18 @@ def main(debug=False, use_k_fold=True):
         cluster = best[0]
         cluster.fit(X, Y)
         clf = best[1]
-        best.append(InductiveClusterer(cluster, clf))
+        if len(best) < 3:
+            best.append(InductiveClusterer(cluster, clf))
         indl = best[2].fit(X, Y)
         # score is distance of prediction to actual value
-        train_score = sum([abs(indl.predict(X)[i] - Y[i]) for i in range(len(Y))]) / len(Y)
+        train_score = indl.score(X, Y)
         print(f'Accuracy: {train_score}')
 
         # test with the test set
         print('Testing...')
         X = np.array([[get_emoji_meaning(text), count_mentions(text)] for text in test['c_text']])
         Y = np.array(test['hatespeech'])
-        test_score = sum([abs(indl.predict(X)[i] - Y[i]) for i in range(len(Y))]) / len(Y)
+        test_score = indl.score(X, Y)
         print(f'Accuracy: {test_score}')
 
         # print some example classifications
@@ -252,19 +262,17 @@ def main(debug=False, use_k_fold=True):
             clf = best[1]
             indl = best[2].fit(X)
             print('Example classifications')
-            for text in df['c_text'].sample(10):
-                print(
-                    f'Tweet with {count_mentions(text)} mentions and {count_hashtags(text)} hashtags and emojis:{get_emoji_meaning(text)} should be {indl.predict([[get_emoji_meaning(text), count_mentions(text)]])[0]}')
-                print(f'Actual hate-speech rating: {df[df["c_text"] == text]["hatespeech"].values[0]}')
+            predictions = []
+            for text in df['c_text'].sample(100):
+                predictions.append([indl.predict([[get_emoji_meaning(text), count_mentions(text)]])[0],df[df["c_text"] == text]["hatespeech"].values[0]])
 
-            dat = df.sample(300)
-            X = np.array([[get_emoji_meaning(text), count_mentions(text)] for text in dat['c_text']])
-            Y = np.array(dat['hatespeech'])
-            metrics.ConfusionMatrixDisplay.from_estimator(clf, X, Y).plot()
-            metrics.RocCurveDisplay.from_estimator(clf, X, Y).plot()
-            metrics.PrecisionRecallDisplay.from_estimator(clf, X, Y).plot()
-            plt.show()
+            print(f'Got {sum([1 for i in predictions if i[0] == i[1]])} correct out of {len(predictions)} total')
+
+    # save the best model
+    with open('model.pkl', 'wb') as f:
+        pickle.dump(best, f)
+        f.close()
 
 
 if __name__ == '__main__':
-    main(True, False)
+    main(True, True)
