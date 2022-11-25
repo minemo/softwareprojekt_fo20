@@ -6,6 +6,7 @@ import demoji
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from model import TwitterHatespeechModel
+from linkscraping import extract_content
 
 
 def load_tsv(path: str):
@@ -152,4 +153,5 @@ def main(debug=False):
 
 
 if __name__ == '__main__':
-    main(True)
+    # main(True)
+    print(extract_content(1387006439160438785))
