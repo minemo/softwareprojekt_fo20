@@ -13,6 +13,8 @@ from sklearn import metrics
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
 from model import InductiveClusterer
+from torch.utils.data import DataLoader
+from linkscraping import extract_content
 
 
 def load_tsv(path: str):
@@ -46,7 +48,7 @@ class TweetTokenizer:
     def encode(self, text: str, max_len=50):
         """Encode a tweet into a list of tokens"""
         text = demoji.replace_with_desc(text, sep=" ")
-        tokens = self.tokenizer.tokenize(text)
+        tokens = self.tokenizer.tokenize(text.lower())
         tokens = tokens[:max_len]
         return tokens
 
@@ -203,10 +205,30 @@ def train_knn(best, debug, df, test, train):
         for text in df['c_text'].sample(100):
             predictions.append([indl.predict([[get_emoji_meaning(text), count_mentions(text)]])[0],
                                 df[df["c_text"] == text]["hatespeech"].values[0]])
-
         print(f'Got {sum([1 for i in predictions if i[0] == i[1]])} correct out of {len(predictions)} total')
     print('-' * 80)
 
 
 if __name__ == '__main__':
     main(True, True)
+    for i, (train, test) in enumerate(splits):
+        train_dataset = TwitterDataset(train, TweetTokenizer(), 280)
+        test_dataset = TwitterDataset(test, TweetTokenizer(), 280)
+        train_dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
+        test_dataloader = DataLoader(test_dataset, batch_size=2, shuffle=True)
+        if debug:
+            print(f"Fold {i + 1}")
+            print(f"Train dataset: {len(train_dataset)}")
+            print(f"Test dataset: {len(test_dataset)}")
+            print(f"Train dataloader: {len(train_dataloader)}")
+            print(f"Test dataloader: {len(test_dataloader)}")
+            print(f"{train_dataset.tokenizer.vocab}")
+            print('-' * 80)
+
+
+if __name__ == '__main__':
+    # main(True)
+
+    for i in [1390025325782917120, 1387006439160438785, 1390750616763441152, 1403975586838683652, 1395809007097503747, 1389408533104545796]:
+        print(extract_content(i))
+        
