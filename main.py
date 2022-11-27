@@ -5,7 +5,6 @@ import nltk
 import demoji
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
-from model import TwitterHatespeechModel
 from linkscraping import extract_content
 
 
@@ -31,7 +30,6 @@ class TweetTokenizer:
         self.vocab = list(set(tokens))
         self.vocab.sort()
         self.vocab = ["[PAD]", "[UNK]", "[CLS]", "[SEP]"] + self.vocab
-
 
     def get_link_info(self, text: str):
         """Get the information about the contents of a link in a tweet"""
@@ -154,4 +152,6 @@ def main(debug=False):
 
 if __name__ == '__main__':
     # main(True)
-    print(extract_content(1387006439160438785))
+
+    for i in [1390025325782917120, 1387006439160438785, 1390750616763441152, 1403975586838683652, 1395809007097503747, 1389408533104545796]:
+        print(extract_content(i))
