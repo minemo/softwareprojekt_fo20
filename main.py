@@ -5,7 +5,6 @@ import numpy as np
 import torch
 import nltk
 import demoji
-import emoji
 import os
 
 from sklearn.cluster import AgglomerativeClustering
@@ -14,9 +13,6 @@ from sklearn import metrics
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
 from model import InductiveClusterer
-
-
-# from model import TwitterHatespeechModel
 
 
 def load_tsv(path: str):
@@ -42,7 +38,7 @@ class TweetTokenizer:
         self.vocab.sort()
         self.vocab = ["[PAD]", "[UNK]", "[CLS]", "[SEP]"] + self.vocab
 
-    def get_Link_info(self, text: str):
+    def get_link_info(self, text: str):
         """Get the information about the contents of a link in a tweet"""
         # TODO: Implement this function
         raise NotImplementedError
@@ -87,6 +83,7 @@ def count_hashtags(text: str):
 
 
 def get_emoji_meaning(text: str):
+    # TODO: Use emoji semantics to get the meaning of an emoji
     # categorize emojis
     # 0: positive
     # 1: negative
@@ -115,40 +112,6 @@ def get_emoji_meaning(text: str):
     return out
 
 
-class TwitterDataset(Dataset):
-    """Dataset of tweets and corresponding hate-speech rating, toxicity and target label"""
-
-    def __init__(self, dataframe: pd.DataFrame, tokenizer, max_len: int):
-        self.df = dataframe
-        self.tokenizer = tokenizer
-        self.max_len = max_len
-        self.tokenizer.generate_vocab(self.df['c_text'].tolist())
-
-    def __len__(self):
-        return len(self.df)
-
-    def __getitem__(self, index: int):
-        row = self.df.iloc[index]
-        text = row['c_text']
-        rating = row['hatespeech']
-        target = row['target']
-
-        encoding = self.tokenizer.encode_plus(
-            text,
-            add_special_tokens=True,
-            max_len=self.max_len,
-            padding='max_length',
-            return_tensors='pt',
-        )
-
-        return {
-            'text': text,
-            'input_ids': encoding['input_ids'].flatten(),
-            'rating': torch.tensor(rating, dtype=torch.long),
-            'target': torch.tensor(["person", "group", "public", ""].index(target), dtype=torch.long)
-        }
-
-
 def cross_validation_split(dataframe: pd.DataFrame, n_splits=5):
     """Split a dataframe into k folds for cross validation"""
     dataframe = dataframe.sample(frac=1).reset_index(drop=True)
@@ -161,7 +124,7 @@ def cross_validation_split(dataframe: pd.DataFrame, n_splits=5):
     return splits
 
 
-def main(debug=False, use_k_fold=True):
+def main(debug=False, use_k_fold=True, save_model=False):
     """Main function"""
 
     if debug:
@@ -197,82 +160,52 @@ def main(debug=False, use_k_fold=True):
         print('Training...')
         for train, test, i in splits:
             print(f'Fold {i + 1}')
-            X = np.array(
-                [[get_emoji_meaning(text), count_mentions(text)] for text in train['c_text']])
-            Y = np.array(train['hatespeech'])
-            cluster = best[0]
-            cluster.fit(X, Y)
-            clf = best[1]
-            if len(best) < 3:
-                best.append(InductiveClusterer(cluster, clf))
-            indl = best[2].fit(X, Y)
-            # score is distance of prediction to actual value
-            train_score = indl.score(X, Y)
-            print(f'Accuracy: {train_score}')
-
-            # test with the test set
-            print('Testing...')
-            X = np.array([[get_emoji_meaning(text), count_mentions(text)] for text in test['c_text']])
-            Y = np.array(test['hatespeech'])
-            test_score = indl.score(X, Y)
-            print(f'Accuracy: {test_score}')
-
-            # print some example classifications
-            if debug:
-                cluster = best[0]
-                clf = best[1]
-                indl = best[2].fit(X)
-                print('Example classifications')
-                predictions = []
-                for text in df['c_text'].sample(100):
-                    predictions.append([indl.predict([[get_emoji_meaning(text), count_mentions(text)]])[0],
-                                        df[df["c_text"] == text]["hatespeech"].values[0]])
-
-                print(f'Got {sum([1 for i in predictions if i[0] == i[1]])} correct out of {len(predictions)} total')
-            print('-' * 80)
+            train_knn(best, debug, df, test, train)
 
     else:
         train = df.sample(frac=0.8)
         test = df.drop(train.index)
-        print('-' * 80)
-        print('Training...')
-        X = np.array(
-            [[get_emoji_meaning(text), count_mentions(text)] for text in train['c_text']])
-        Y = np.array(train['hatespeech'])
-        cluster = best[0]
-        cluster.fit(X, Y)
-        clf = best[1]
-        if len(best) < 3:
-            best.append(InductiveClusterer(cluster, clf))
-        indl = best[2].fit(X, Y)
-        # score is distance of prediction to actual value
-        train_score = indl.score(X, Y)
-        print(f'Accuracy: {train_score}')
-
-        # test with the test set
-        print('Testing...')
-        X = np.array([[get_emoji_meaning(text), count_mentions(text)] for text in test['c_text']])
-        Y = np.array(test['hatespeech'])
-        test_score = indl.score(X, Y)
-        print(f'Accuracy: {test_score}')
-
-        # print some example classifications
-        if debug:
-            print('-' * 80)
-            cluster = best[0]
-            clf = best[1]
-            indl = best[2].fit(X)
-            print('Example classifications')
-            predictions = []
-            for text in df['c_text'].sample(100):
-                predictions.append([indl.predict([[get_emoji_meaning(text), count_mentions(text)]])[0],df[df["c_text"] == text]["hatespeech"].values[0]])
-
-            print(f'Got {sum([1 for i in predictions if i[0] == i[1]])} correct out of {len(predictions)} total')
+        train_knn(best, debug, df, test, train)
 
     # save the best model
-    with open('model.pkl', 'wb') as f:
-        pickle.dump(best, f)
-        f.close()
+    if save_model:
+        with open('model.pkl', 'wb') as f:
+            pickle.dump(best, f)
+            f.close()
+
+
+def train_knn(best, debug, df, test, train):
+    X = np.array(
+        [[get_emoji_meaning(text), count_mentions(text)] for text in train['c_text']])
+    Y = np.array(train['hatespeech'])
+    cluster = best[0]
+    cluster.fit(X, Y)
+    clf = best[1]
+    if len(best) < 3:
+        best.append(InductiveClusterer(cluster, clf))
+    indl = best[2].fit(X, Y)
+    # score is distance of prediction to actual value
+    train_score = indl.score(X, Y)
+    print(f'Accuracy: {train_score}')
+    # test with the test set
+    print('Testing...')
+    X = np.array([[get_emoji_meaning(text), count_mentions(text)] for text in test['c_text']])
+    Y = np.array(test['hatespeech'])
+    test_score = indl.score(X, Y)
+    print(f'Accuracy: {test_score}')
+    # print some example classifications
+    if debug:
+        cluster = best[0]
+        clf = best[1]
+        indl = best[2].fit(X)
+        print('Example classifications')
+        predictions = []
+        for text in df['c_text'].sample(100):
+            predictions.append([indl.predict([[get_emoji_meaning(text), count_mentions(text)]])[0],
+                                df[df["c_text"] == text]["hatespeech"].values[0]])
+
+        print(f'Got {sum([1 for i in predictions if i[0] == i[1]])} correct out of {len(predictions)} total')
+    print('-' * 80)
 
 
 if __name__ == '__main__':
