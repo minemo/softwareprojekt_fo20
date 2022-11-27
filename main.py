@@ -22,58 +22,6 @@ def load_tsv(path: str):
     return pd.read_csv(path, sep="\t")
 
 
-class TweetTokenizer:
-    """A tokenizer for tweets with the ability to decode emojis"""
-
-    # TODO: use get_Link_info when its implemented to add the link information to the tweet
-
-    def __init__(self):
-        self.tokenizer = nltk.tokenize.TweetTokenizer()
-        self.vocab = []
-
-    def generate_vocab(self, texts: list[str]):
-        """Generate a vocabulary from a list of tweets"""
-        tokens = []
-        for text in texts:
-            tokens += self.encode(text)
-        self.vocab = list(set(tokens))
-        self.vocab.sort()
-        self.vocab = ["[PAD]", "[UNK]", "[CLS]", "[SEP]"] + self.vocab
-
-    def get_link_info(self, text: str):
-        """Get the information about the contents of a link in a tweet"""
-        # TODO: Implement this function
-        raise NotImplementedError
-
-    def encode(self, text: str, max_len=50):
-        """Encode a tweet into a list of tokens"""
-        text = demoji.replace_with_desc(text, sep=" ")
-        tokens = self.tokenizer.tokenize(text.lower())
-        tokens = tokens[:max_len]
-        return tokens
-
-    def encode_plus(self, text: str, max_len=50, add_special_tokens=True, padding="max_length",
-                    return_attention_mask=True,
-                    return_tensors="pt"):
-        """Encode a Tweet and return a dictionary of tensors"""
-        tokens = self.encode(text, max_len)
-        if add_special_tokens:
-            tokens = ["[CLS]"] + tokens + ["[SEP]"]
-        if padding == "max_length":
-            tokens = tokens + ["[PAD]"] * (max_len - len(tokens))
-        token_ids = [self.vocab.index(token) for token in tokens]
-        token_ids = torch.tensor(token_ids)
-        if return_attention_mask:
-            attention_mask = token_ids != self.vocab.index("[PAD]")
-            attention_mask = attention_mask.to(torch.long)
-        if return_tensors == "pt":
-            token_ids = token_ids.to(torch.long)
-        output = {"input_ids": token_ids}
-        if return_attention_mask:
-            output["attention_mask"] = attention_mask
-        return output
-
-
 def count_mentions(text: str):
     """Count the number of mentions in a tweet"""
     return text.count("@")
@@ -210,25 +158,8 @@ def train_knn(best, debug, df, test, train):
 
 
 if __name__ == '__main__':
-    main(True, True)
-    for i, (train, test) in enumerate(splits):
-        train_dataset = TwitterDataset(train, TweetTokenizer(), 280)
-        test_dataset = TwitterDataset(test, TweetTokenizer(), 280)
-        train_dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True)
-        test_dataloader = DataLoader(test_dataset, batch_size=2, shuffle=True)
-        if debug:
-            print(f"Fold {i + 1}")
-            print(f"Train dataset: {len(train_dataset)}")
-            print(f"Test dataset: {len(test_dataset)}")
-            print(f"Train dataloader: {len(train_dataloader)}")
-            print(f"Test dataloader: {len(test_dataloader)}")
-            print(f"{train_dataset.tokenizer.vocab}")
-            print('-' * 80)
-
-
-if __name__ == '__main__':
     # main(True)
 
-    for i in [1390025325782917120, 1387006439160438785, 1390750616763441152, 1403975586838683652, 1395809007097503747, 1389408533104545796]:
+    for i in [1390025325782917120, 1387006439160438785, 1390750616763441152, 1403975586838683652, 1395809007097503747,
+              1389408533104545796]:
         print(extract_content(i))
-        
