@@ -18,19 +18,21 @@ def _classifier_has(attr):
 
 class InductiveClusterer(BaseEstimator):
     def __init__(self, clusterer, classifier):
+        self.classifier_ = None
+        self.clusterer_ = None
         self.clusterer = clusterer
         self.classifier = classifier
         self.best_score_ = None
 
-    def fit(self, X, y=None):
+    def fit(self, x, y=None):
         self.clusterer_ = clone(self.clusterer)
         self.classifier_ = clone(self.classifier)
-        y = self.clusterer_.fit_predict(X)
-        self.classifier_.fit(X, y)
+        y = self.clusterer_.fit_predict(x)
+        self.classifier_.fit(x, y)
         return self
 
-    def score(self, X, y):
-        score = sum([abs(self.predict(X)[i] - y[i]) for i in range(len(y))]) / len(y)
+    def score(self, x, y):
+        score = sum([abs(self.predict(x)[i] - y[i]) for i in range(len(y))]) / len(y)
         if self.best_score_ is None or score > self.best_score_:
             self.best_score_ = score
         return score
