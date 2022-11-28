@@ -2,8 +2,6 @@ import pickle
 
 import pandas as pd
 import numpy as np
-import torch
-import nltk
 import demoji
 import os
 
@@ -13,7 +11,6 @@ from sklearn import metrics
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
 from model import InductiveClusterer
-from torch.utils.data import DataLoader
 from linkscraping import extract_content
 
 
@@ -32,34 +29,18 @@ def count_hashtags(text: str):
     return text.count("#")
 
 
-def get_emoji_meaning(text: str):
-    # TODO: Use emoji semantics to get the meaning of an emoji
-    # categorize emojis
-    # 0: positive
-    # 1: negative
-    # 2: neutral
-    # 3: female
-    # 4: male
-
+def get_emoji_meaning(text: str, emojidata: pd.DataFrame):
     emojs = list(demoji.findall(text))
-    out = 2.0
-    if emojs:
-        vals = []
-        for e in emojs:
-            if '❤' or '‍🤝' in e:
-                vals.append(0.0)
-            elif '‍♂' in e:
-                vals.append(4.0)
-            elif '‍♀' in e:
-                vals.append(3.0)
-            elif '😂' in e:
-                vals.append(2.0)
-            elif '😭' in e:
-                vals.append(1.0)
-            else:
-                vals.append(2.0)
-        out = sum(vals) / len(vals)
-    return out
+    # calculate the mean sentiment of the emojis
+    sentiment = 0
+    for emo in emojs:
+        if emo in emojidata["Emoji"].values:
+            positive = int(emojidata[emojidata['Emoji'] == emo]["Positive"])
+            negative = int(emojidata[emojidata['Emoji'] == emo]["Negative"])
+            neutral = int(emojidata[emojidata['Emoji'] == emo]["Neutral"])
+            # calculate average sentiment (positive is 1, negative is -1, neutral is 0)
+            sentiment += (positive - negative) / (positive + negative + neutral)
+    return (sentiment / len(emojs)) if len(emojs) > 0 else 0.0
 
 
 def cross_validation_split(dataframe: pd.DataFrame, n_splits=5):
@@ -84,6 +65,11 @@ def main(debug=False, use_k_fold=True, save_model=False):
 
     # Load the data
     df = load_tsv("data.tsv")
+    emojidata = pd.read_csv("emoji_sentiment.csv")
+    # append features to the dataframe
+    df["emoji_sentiment"] = df["c_text"].apply(lambda x: get_emoji_meaning(x, emojidata))
+    df["mentions"] = df["c_text"].apply(lambda x: count_mentions(x))
+    df["hashtags"] = df["c_text"].apply(lambda x: count_hashtags(x))
 
     # Print some information about the data
     if debug:
@@ -104,18 +90,20 @@ def main(debug=False, use_k_fold=True, save_model=False):
         print("No existing model, training from scratch...")
 
     if use_k_fold:
+        # shuffle the data and split it into 5 folds
+        df = df.sample(frac=1).reset_index(drop=True)
         splits = cross_validation_split(df, n_splits=5)
 
         print('-' * 80)
         print('Training...')
         for train, test, i in splits:
             print(f'Fold {i + 1}')
-            train_knn(best, debug, df, test, train)
+            train_knn(best, debug, df, test, train, emojidata)
 
     else:
         train = df.sample(frac=0.8)
-        test = df.drop(train.index)
-        train_knn(best, debug, df, test, train)
+        test = df.drop(train)
+        train_knn(best, debug, df, test, train, emojidata)
 
     # save the best model
     if save_model:
@@ -124,9 +112,9 @@ def main(debug=False, use_k_fold=True, save_model=False):
             f.close()
 
 
-def train_knn(best, debug, df, test, train):
+def train_knn(best, debug, df, test, train, emojidata):
     X = np.array(
-        [[get_emoji_meaning(text), count_mentions(text)] for text in train['c_text']])
+        [np.array([x, y, z]) for x, y, z in zip(train["emoji_sentiment"], train["mentions"], train["hashtags"])])
     Y = np.array(train['hatespeech'])
     cluster = best[0]
     cluster.fit(X, Y)
@@ -139,7 +127,7 @@ def train_knn(best, debug, df, test, train):
     print(f'Accuracy: {train_score}')
     # test with the test set
     print('Testing...')
-    X = np.array([[get_emoji_meaning(text), count_mentions(text)] for text in test['c_text']])
+    X = np.array([np.array([x, y, z]) for x, y, z in zip(train["emoji_sentiment"], train["mentions"], train["hashtags"])])
     Y = np.array(test['hatespeech'])
     test_score = indl.score(X, Y)
     print(f'Accuracy: {test_score}')
@@ -151,15 +139,11 @@ def train_knn(best, debug, df, test, train):
         print('Example classifications')
         predictions = []
         for text in df['c_text'].sample(100):
-            predictions.append([indl.predict([[get_emoji_meaning(text), count_mentions(text)]])[0],
+            predictions.append([indl.predict([np.array([x, y, z]) for x, y, z in zip(train["emoji_sentiment"], train["mentions"], train["hashtags"])])[0],
                                 df[df["c_text"] == text]["hatespeech"].values[0]])
         print(f'Got {sum([1 for i in predictions if i[0] == i[1]])} correct out of {len(predictions)} total')
     print('-' * 80)
 
 
 if __name__ == '__main__':
-    # main(True)
-
-    for i in [1390025325782917120, 1387006439160438785, 1390750616763441152, 1403975586838683652, 1395809007097503747,
-              1389408533104545796]:
-        print(extract_content(i))
+    main(True, True, True)
