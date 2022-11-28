@@ -32,7 +32,7 @@ class InductiveClusterer(BaseEstimator):
         return self
 
     def score(self, x, y):
-        score = sum([abs(self.predict(x)[i] - y[i]) for i in range(len(y))]) / len(y)
+        score = self.classifier_.score(x, y)
         if self.best_score_ is None or score > self.best_score_:
             self.best_score_ = score
         return score
