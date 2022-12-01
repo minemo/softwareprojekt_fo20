@@ -1,4 +1,8 @@
 ### Python template
+# project related files that should be ignored by git
+dataset_features.tex
+model.pkl
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

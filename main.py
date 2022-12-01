@@ -6,9 +6,13 @@ import numpy as np
 import demoji
 import os
 
+import torch
+from torch.utils.data import DataLoader
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.ensemble import RandomForestClassifier
-from model import InductiveClusterer
+from torch import optim, nn
+
+from model import InductiveClusterer, LNN, LnnDataset
 from linkscraping import extract_content
 
 
@@ -28,8 +32,22 @@ def count_hashtags(text: str):
 
 
 def count_words(text: str):
-    """Count the number of words in a tweet using the nltk library"""
-    return len(nltk.word_tokenize(text))
+    """Count the number of words in a tweet using the nltk tweet tokenizer"""
+    return len(nltk.tokenize.TweetTokenizer().tokenize(text))
+
+
+def get_link_similarity(tid, text):
+    """Calculates the similarity between the text and the most relevant words of the website"""
+    relevant_words = []
+    try:
+        relevant_words = extract_content(tid)
+        if relevant_words is [] or relevant_words is None:
+            return 0
+        else:
+            return nltk.jaccard_distance(set(nltk.tokenize.TweetTokenizer().tokenize(text)), relevant_words[0].keys())
+    except Exception as e:
+        print(f'Error while extracting content for {tid}: {e}')
+        return 0
 
 
 def get_emoji_meaning(text: str, emojidata: pd.DataFrame):
@@ -52,11 +70,11 @@ def save_dataset_features(dataset: pd.DataFrame, path: str):
         # save as latex table
 
         # count tweets with emojis
-        count_emojitexts = dataset[dataset["emoji_sentiment"] != 0].shape[0]
+        count_emojitexts = dataset[dataset["c_text"].apply(lambda x: len(demoji.findall(x))) > 0].shape[0]
         # count tweets with hashtags
-        nhashtags = dataset[dataset["hashtags"] != 0].shape[0]
+        nhashtags = dataset["features"].apply(lambda x: x[2]).sum()
         # count tweets with mentions
-        nmentions = dataset[dataset["mentions"] != 0].shape[0]
+        nmentions = dataset["features"].apply(lambda x: x[1]).sum()
         # count tweets with urls
         count_urls = dataset[dataset["c_text"].str.contains("http")].shape[0]
 
@@ -93,9 +111,13 @@ def main(debug=False, use_k_fold=True, save_model=False):
     emojidata = pd.read_csv("emoji_sentiment.csv")
 
     # append features to the dataframe
-    df["emoji_sentiment"] = df["c_text"].apply(lambda x: get_emoji_meaning(x, emojidata))
-    df["mentions"] = df["c_text"].apply(lambda x: count_mentions(x))
-    df["hashtags"] = df["c_text"].apply(lambda x: count_hashtags(x))
+    df["features"] = df["c_text"].apply(lambda x: [get_emoji_meaning(x, emojidata),
+                                                   count_mentions(x),
+                                                   count_hashtags(x),
+                                                   count_words(x)])
+
+    # add likecount and retweetcount to the features
+    df["features"] = df.apply(lambda x: x["features"] + [x["like_count"], x["retweet_count"]], axis=1)
 
     # remove entries where the target is empty
     df = df[df["target"].notna()]
@@ -108,14 +130,20 @@ def main(debug=False, use_k_fold=True, save_model=False):
         print(df.describe())
         print(df.info())
 
-    best = [AgglomerativeClustering(), RandomForestClassifier(n_jobs=-1)]
+    insize = 4  # number of features
+    hidden = 16  # number of hidden units
+    outsize = 4  # number of output units (target classes)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    lnn_model = (LNN(insize, hidden, outsize).to(device), device)
+    best = [AgglomerativeClustering(), RandomForestClassifier(n_jobs=-1), lnn_model]
+
     if os.path.exists("model.pkl"):
         print("Found model.pkl, loading it...")
         with open("model.pkl", "rb") as f:
             best = pickle.load(f)
         print(f'Loaded Model is: {best}')
         print(f'Number of clusters: {best[0].n_clusters_}')
-        print(f'Current loss is: {best[2].best_score_}')
+        print(f'Current loss is: {best[1].best_score_}')
     else:
         print("No existing model, training from scratch...")
 
@@ -127,13 +155,26 @@ def main(debug=False, use_k_fold=True, save_model=False):
         print('-' * 80)
         print('Training...')
         for train, test, i in splits:
+            # train the clustering model
             print(f'Fold {i + 1}')
             train_knn(best, debug, df, test, train)
 
+            # train the linear neural network
+            # append the corresponding hatespeech label to the feature vector
+            train["features"] = train.apply(lambda x: x["features"] + [x["hatespeech"]], axis=1)
+            test["features"] = test.apply(lambda x: x["features"] + [x["hatespeech"]], axis=1)
+            print(train.shape, test.shape)
+            # train_linearNN(best, debug, df, LnnDataset(test), LnnDataset(train))
+
     else:
         train = df.sample(frac=0.8)
-        test = df.drop(train)
-        train_knn(best, debug, df, test, train)
+        test = df.drop(train.index)
+        # train_knn(best, debug, df, test, train)
+
+        train["features"] = train.apply(lambda x: x["features"] + [x["hatespeech"]], axis=1)
+        test["features"] = test.apply(lambda x: x["features"] + [x["hatespeech"]], axis=1)
+        # print(train, test)
+        train_linearNN(best, debug, df, LnnDataset(test), LnnDataset(train))
 
     # save the best model
     if save_model:
@@ -142,38 +183,80 @@ def main(debug=False, use_k_fold=True, save_model=False):
             f.close()
 
 
+def train_linearNN(best, debug, df, test: LnnDataset, train: LnnDataset, epochs=100):
+    model, device = best[2]
+
+    # convert the training data to a DataLoader
+    train_dl = DataLoader(train, batch_size=1, shuffle=True)
+    test_dl = DataLoader(test, batch_size=1, shuffle=True)
+
+    # train the model
+    loss_fn = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.01)
+    train_loss = []
+    test_loss = []
+    for epoch in range(epochs):
+        model.train()
+        for xb, yb in train_dl:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            # convert yb to one-hot
+            yb = torch.nn.functional.one_hot(yb, num_classes=4).float()
+            pred = model(xb)
+            loss = loss_fn(pred, yb)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            train_loss.append(loss.item())
+
+        model.eval()
+        with torch.no_grad():
+            for xb, yb in test_dl:
+                xb = xb.to(device)
+                yb = yb.to(device)
+                # convert yb to one-hot
+                yb = torch.nn.functional.one_hot(yb, num_classes=4).float()
+                pred = model(xb)
+                loss = loss_fn(pred, yb)
+                test_loss.append(loss.item())
+
+        if debug:
+            print(f'Epoch {epoch + 1}: {loss.item()}')
+
+
 def train_knn(best, debug, df, test, train):
-    x = np.array(
-        [np.array([x, y, z]) for x, y, z in zip(train["emoji_sentiment"], train["mentions"], train["hashtags"])])
-    y = np.array(train['hatespeech'])
+    # define the data
+    x = np.array(list(train["features"]))
+    hy = np.array(train['hatespeech'])
+
+    # train the clustering model
     cluster = best[0]
-    cluster.fit(x, y)
+    cluster.fit(x, hy)
     clf = best[1]
-    if len(best) < 3:
+    if len(best) < 4:
         best.append(InductiveClusterer(cluster, clf))
-    indl = best[2].fit(x, y)
-    # score is distance of prediction to actual value
-    train_score = indl.score(x, y)
-    print(f'Accuracy: {train_score}')
+    indl = best[3].fit(x, hy)
+
+    hate_train_score = indl.score(x, hy)
+    print(f'Hatespeech accuracy: {hate_train_score}')
     # test with the test set
     print('Testing...')
-    x = np.array(
-        [np.array([x, y, z]) for x, y, z in zip(test["emoji_sentiment"], test["mentions"], test["hashtags"])])
-    y = np.array(test['hatespeech'])
-    test_score = indl.score(x, y)
-    print(f'Accuracy: {test_score}')
+    x = np.array(list(test["features"]))
+    hy = np.array(test['hatespeech'])
+    ty = np.array([["person", "group", "public"].index(i) for i in test['target']])
+    hate_test_score = indl.score(x, hy)
+    print(f'Hatespeech accuracy: {hate_test_score}')
     # print some example classifications
     if debug:
-        indl = best[2].fit(x, y)
+        indl = best[3].fit(x, hy)
         print('-' * 20 + 'Example Classifications' + '-' * 20)
         predictions = []
         for i in range(100):
-            data = df.iloc[i]
-            x = np.array(
-                [np.array([data["emoji_sentiment"], data["mentions"], data["hashtags"]])])
-            y = df["hatespeech"].iloc[i]
+            data = df.sample(1)
+            x = np.array(list(data["features"])).reshape(1, -1)
+            hy = df["hatespeech"].iloc[i]
             prediction = indl.predict(x)
-            predictions.append((y, prediction))
+            predictions.append((hy, prediction))
         print(f'Got {len([x for x in predictions if x[0] == x[1]])} correct predictions out of 100')
 
     print('-' * 80)
