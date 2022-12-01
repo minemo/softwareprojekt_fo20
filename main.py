@@ -135,15 +135,15 @@ def main(debug=False, use_k_fold=True, save_model=False):
     outsize = 4  # number of output units (target classes)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     lnn_model = (LNN(insize, hidden, outsize).to(device), device)
-    best = [AgglomerativeClustering(), RandomForestClassifier(n_jobs=-1), lnn_model]
+    hatespeechmodel = [AgglomerativeClustering(), RandomForestClassifier(n_jobs=-1), lnn_model]
 
     if os.path.exists("model.pkl"):
         print("Found model.pkl, loading it...")
         with open("model.pkl", "rb") as f:
-            best = pickle.load(f)
-        print(f'Loaded Model is: {best}')
-        print(f'Number of clusters: {best[0].n_clusters_}')
-        print(f'Current loss is: {best[1].best_score_}')
+            hatespeechmodel = pickle.load(f)
+        print(f'Loaded Model is: {hatespeechmodel}')
+        print(f'Number of clusters: {hatespeechmodel[0].n_clusters_}')
+        print(f'Current loss is: {hatespeechmodel[3].best_score_ if len(hatespeechmodel) > 3 else "N/A"}')
     else:
         print("No existing model, training from scratch...")
 
@@ -157,7 +157,7 @@ def main(debug=False, use_k_fold=True, save_model=False):
         for train, test, i in splits:
             # train the clustering model
             print(f'Fold {i + 1}')
-            train_knn(best, debug, df, test, train)
+            train_knn(hatespeechmodel, debug, df, test, train)
 
             # train the linear neural network
             # append the corresponding hatespeech label to the feature vector
@@ -174,12 +174,12 @@ def main(debug=False, use_k_fold=True, save_model=False):
         train["features"] = train.apply(lambda x: x["features"] + [x["hatespeech"]], axis=1)
         test["features"] = test.apply(lambda x: x["features"] + [x["hatespeech"]], axis=1)
         # print(train, test)
-        train_linearNN(best, debug, df, LnnDataset(test), LnnDataset(train))
+        train_linearNN(hatespeechmodel, debug, df, LnnDataset(test), LnnDataset(train))
 
     # save the best model
     if save_model:
         with open('model.pkl', 'wb') as f:
-            pickle.dump(best, f)
+            pickle.dump(hatespeechmodel, f)
             f.close()
 
 
@@ -268,5 +268,6 @@ if __name__ == '__main__':
 
 def output(dataframe: pd.DataFrame):
     headerList = ['c_id', 'hatespeech', 'target']
-    dataframe["target"] = ["person" if ele == 1 else "group" if ele == 2 else "public" for ele in dataframe["target"]]
+    targets = ["person", "group", "public"]
+    dataframe["target"] = [targets[ele] if ele <= len(targets) else "none" for ele in dataframe["target"]]
     return dataframe.to_csv('Target_Gruppe6_1a.csv',header=headerList, index=False)
