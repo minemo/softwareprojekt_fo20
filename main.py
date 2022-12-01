@@ -264,3 +264,9 @@ def train_knn(best, debug, df, test, train):
 
 if __name__ == '__main__':
     main(True, True, True)
+
+
+def output(dataframe: pd.DataFrame):
+    headerList = ['c_id', 'hatespeech', 'target']
+    dataframe["target"] = ["person" if ele == 1 else "group" if ele == 2 else "public" for ele in dataframe["target"]]
+    return dataframe.to_csv('Target_Gruppe6_1a.csv',header=headerList, index=False)
